@@ -136,3 +136,6 @@ cmd/shell-completions/
 components/mediation/inbound-endpoints/org.wso2.micro.integrator.inbound.endpoint/activemq-data/
 components/mediation/inbound-endpoints/org.wso2.micro.integrator.inbound.endpoint/propertyValue
 
+
+.zip
+./wso2mi-4.6.0-SNAPSHOT
