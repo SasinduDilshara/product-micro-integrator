@@ -72,6 +72,7 @@ public class ScheduledTaskManager extends AbstractQuartzTaskManager {
     private static final String MP_STATE = "MESSAGE_PROCESSOR_STATE";
     private Registry registry = null;
     private static final Map<String, String> recentlyUpdatedStates = new ConcurrentHashMap<>();
+    private volatile long lastHotDeploymentSleepTime = 0;
 
     ScheduledTaskManager(TaskRepository taskRepository, TaskStore taskStore) throws TaskException {
 
@@ -317,11 +318,15 @@ public class ScheduledTaskManager extends AbstractQuartzTaskManager {
         if (isCoordinationEnabled && clusterCoordinator.isLeader() && deployedCoordinatedTasks.contains(taskName)) {
             long hotDeploymentDelay = clusterCoordinator.getHeartbeatMaxRetryInterval();
             try {
-                log.info("Waiting for " + hotDeploymentDelay + " ms to hotdeployment to settle.");
-                try {
-                    Thread.sleep(hotDeploymentDelay); // Wait for nodes to settle
-                } catch (InterruptedException e) {
-                    // Ignore
+                long now = System.currentTimeMillis();
+                if (now - lastHotDeploymentSleepTime >= hotDeploymentDelay) {
+                    log.info("Waiting for " + hotDeploymentDelay + " ms for hot deployment to settle.");
+                    try {
+                        Thread.sleep(hotDeploymentDelay);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    lastHotDeploymentSleepTime = System.currentTimeMillis();
                 }
                 log.info("Deleting task " + taskName + " from the data base since this is a coordinated task.");
                 taskStore.deleteTasks(Collections.singletonList(taskName));
