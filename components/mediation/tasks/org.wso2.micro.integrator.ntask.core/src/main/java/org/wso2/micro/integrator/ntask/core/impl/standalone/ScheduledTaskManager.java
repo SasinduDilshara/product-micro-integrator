@@ -73,6 +73,12 @@ public class ScheduledTaskManager extends AbstractQuartzTaskManager {
     private Registry registry = null;
     private static final Map<String, String> recentlyUpdatedStates = new ConcurrentHashMap<>();
 
+    /**
+     * Tracks the last time we slept for hotDeployment to settle. Used to avoid sleeping once per
+     * task when multiple coordinated tasks are deleted in rapid succession (e.g. CApp undeployment).
+     */
+    private volatile long lastHotDeploymentSettleTime = 0;
+
     ScheduledTaskManager(TaskRepository taskRepository, TaskStore taskStore) throws TaskException {
 
         super(taskRepository, taskStore);
@@ -317,11 +323,15 @@ public class ScheduledTaskManager extends AbstractQuartzTaskManager {
         if (isCoordinationEnabled && clusterCoordinator.isLeader() && deployedCoordinatedTasks.contains(taskName)) {
             long hotDeploymentDelay = clusterCoordinator.getHeartbeatMaxRetryInterval();
             try {
-                log.info("Waiting for " + hotDeploymentDelay + " ms to hotdeployment to settle.");
-                try {
-                    Thread.sleep(hotDeploymentDelay); // Wait for nodes to settle
-                } catch (InterruptedException e) {
-                    // Ignore
+                long now = System.currentTimeMillis();
+                if (now - lastHotDeploymentSettleTime >= hotDeploymentDelay) {
+                    log.info("Waiting for " + hotDeploymentDelay + " ms to hotdeployment to settle.");
+                    try {
+                        Thread.sleep(hotDeploymentDelay); // Wait for nodes to settle
+                    } catch (InterruptedException e) {
+                        // Ignore
+                    }
+                    lastHotDeploymentSettleTime = System.currentTimeMillis();
                 }
                 log.info("Deleting task " + taskName + " from the data base since this is a coordinated task.");
                 taskStore.deleteTasks(Collections.singletonList(taskName));
