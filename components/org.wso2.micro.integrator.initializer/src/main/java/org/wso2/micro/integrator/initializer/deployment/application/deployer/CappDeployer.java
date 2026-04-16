@@ -64,17 +64,24 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
+
+import javax.xml.namespace.QName;
 
 import javax.xml.stream.XMLStreamException;
 
 import static org.wso2.micro.core.Constants.SUPER_TENANT_DOMAIN_NAME;
 import static org.wso2.micro.integrator.initializer.deployment.synapse.deployer.SynapseAppDeployerConstants.API_TYPE;
+import static org.wso2.micro.integrator.initializer.deployment.synapse.deployer.SynapseAppDeployerConstants.MEDIATOR_TYPE;
+import static org.wso2.micro.integrator.initializer.deployment.synapse.deployer.SynapseAppDeployerConstants.SYNAPSE_LIBRARY_TYPE;
 import static org.wso2.micro.integrator.initializer.utils.Constants.CAPP_FOLDER_NAME;
 import static org.wso2.micro.integrator.initializer.utils.Constants.CAR_FILE_EXTENSION;
 import static org.wso2.micro.integrator.initializer.utils.DeployerUtil.getCAppsWithDescriptorCount;
@@ -95,6 +102,14 @@ public class CappDeployer extends AbstractDeployer {
     private static final String SWAGGER_SUBSTRING = "_swagger";
     private static final String METADATA_FOLDER_NAME = "metadata";
     private static final String ARTIFACT_FILE = "artifact.xml";
+    private static final String REGISTRY_RESOURCE_TYPE = "registry/resource";
+    private static final Set<String> HIGH_PRIORITY_ARTIFACT_TYPES = new HashSet<>(
+            Arrays.asList(MEDIATOR_TYPE, SYNAPSE_LIBRARY_TYPE, REGISTRY_RESOURCE_TYPE));
+    /**
+     * Tracks whether the initial deployment pass has completed and retries (if any) have been triggered.
+     * Reset on cleanup to support server restarts within the same JVM.
+     */
+    private static boolean initialDeploymentDone = false;
     /**
      * Carbon application repository directory.
      */
@@ -276,8 +291,19 @@ public class CappDeployer extends AbstractDeployer {
             throw e;
         }
 
-        // Initial execution of Service catalog Deployer at server startup when last CApp get deployed
+        // After all CApps have been processed in the initial pass, retry any that failed once.
+        // This handles ordering issues where a consumer CApp was deployed before its provider CApp.
         boolean isAllCAppsDeployed = getCAppFileList().length == cAppMap.size() + faultyCapps.size();
+        if (isAllCAppsDeployed && !initialDeploymentDone) {
+            initialDeploymentDone = true;
+            if (!faultyCapps.isEmpty()) {
+                retryFaultyCapps();
+                // Recalculate after retries to get the correct value for service catalog check below
+                isAllCAppsDeployed = getCAppFileList().length == cAppMap.size() + faultyCapps.size();
+            }
+        }
+
+        // Initial execution of Service catalog Deployer at server startup when last CApp get deployed
         if (isServiceCatalogStartupExecutionPending && serviceCatalogConfiguration != null && isAllCAppsDeployed) {
             ServiceCatalogDeployer serviceDeployer = new ServiceCatalogDeployer(null,
                     ((CarbonAxisConfigurator) axisConfig.getAxisConfiguration().getConfigurator()).getRepoLocation(),
@@ -817,6 +843,7 @@ public class CappDeployer extends AbstractDeployer {
         cAppMap.clear();
         faultyCapps.clear();
         faultyCAppObjects.clear();
+        initialDeploymentDone = false;
     }
 
     public void setSecretCallbackHandlerService(SecretCallbackHandlerService secretCallbackHandlerService) {
@@ -884,12 +911,13 @@ public class CappDeployer extends AbstractDeployer {
 
         int cAppsWithDescriptorCount = getCAppsWithDescriptorCount(cAppFiles);
         if (cAppsWithDescriptorCount == 0) {
-            super.sort(filesToDeploy, startIndex, toIndex);
+            sortWithContentPriority(filesToDeploy, startIndex, toIndex, cAppFiles);
         } else if (cAppsWithDescriptorCount < cAppFiles.length) {
             log.warn(
                     "Some or all CApps are missing descriptor.xml file. Hence, Dependency-based ordering will be " +
-                            "skipped, and all CApps will be deployed in alphabetical order.");
-            super.sort(filesToDeploy, startIndex, toIndex);
+                            "skipped. CApps providing class mediators, connectors, or registry resources will be " +
+                            "deployed first; all others follow in alphabetical order.");
+            sortWithContentPriority(filesToDeploy, startIndex, toIndex, cAppFiles);
         } else {
             try {
                 File[] orderedAllCApps = getCAppProcessingOrder(cAppFiles);
@@ -914,6 +942,100 @@ public class CappDeployer extends AbstractDeployer {
                 log.warn("Unable to determine the CApp processing order based on dependencies. " +
                                 "CApps will be deployed in alphabetical order instead. " + e.getMessage());
                 super.sort(filesToDeploy, startIndex, toIndex);
+            }
+        }
+    }
+
+    /**
+     * Sorts the sublist of DeploymentFileData objects using content-based priority ordering.
+     * CApps that provide class mediators (lib/synapse/mediator), connectors (synapse/lib), or
+     * registry resources (registry/resource) are assigned higher priority and deployed first.
+     * Within each priority tier the order is alphabetical by file name.
+     *
+     * @param filesToDeploy the full list of DeploymentFileData objects
+     * @param startIndex    the starting index (inclusive) of the sublist to sort
+     * @param toIndex       the ending index (exclusive) of the sublist to sort
+     * @param cAppFiles     array of .car File objects to inspect for priority
+     */
+    private void sortWithContentPriority(List<DeploymentFileData> filesToDeploy, int startIndex, int toIndex,
+                                         File[] cAppFiles) {
+        Set<String> highPriorityNames = new HashSet<>();
+        for (File cAppFile : cAppFiles) {
+            if (isHighPriorityCApp(cAppFile)) {
+                highPriorityNames.add(cAppFile.getName());
+            }
+        }
+        List<DeploymentFileData> subList = filesToDeploy.subList(startIndex, toIndex);
+        subList.sort(Comparator
+                .comparingInt((DeploymentFileData dfd) ->
+                        highPriorityNames.contains(dfd.getFile().getName()) ? 0 : 1)
+                .thenComparing(dfd -> dfd.getFile().getName()));
+    }
+
+    /**
+     * Returns {@code true} if the given .car file contains at least one artifact whose type is
+     * in the set of high-priority types ({@code lib/synapse/mediator}, {@code synapse/lib},
+     * {@code registry/resource}).  These CApps provide shared libraries or resources that other
+     * CApps may depend on, so they must be deployed before consumer CApps.
+     *
+     * @param cAppFile the .car archive to inspect
+     * @return true if this CApp should be deployed before non-provider CApps
+     */
+    private boolean isHighPriorityCApp(File cAppFile) {
+        if (!cAppFile.isFile()) {
+            return false;
+        }
+        try (ZipFile zip = new ZipFile(cAppFile)) {
+            ZipEntry artifactsXml = zip.getEntry("artifacts.xml");
+            if (artifactsXml == null) {
+                return false;
+            }
+            try (InputStream in = zip.getInputStream(artifactsXml)) {
+                OMElement root = new StAXOMBuilder(in).getDocumentElement();
+                java.util.Iterator<OMElement> artifacts =
+                        root.getChildrenWithLocalName(org.wso2.micro.application.deployer.config.Artifact.ARTIFACT);
+                while (artifacts.hasNext()) {
+                    OMElement artifact = artifacts.next();
+                    String type = artifact.getAttributeValue(new QName("type"));
+                    if (type != null && HIGH_PRIORITY_ARTIFACT_TYPES.contains(type)) {
+                        return true;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            if (log.isDebugEnabled()) {
+                log.debug("Unable to determine priority for CApp: " + cAppFile.getName() +
+                        ". Treating as normal priority.", e);
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Retries deployment of all currently faulty CApps once.  This is called after the initial
+     * deployment pass completes so that CApps whose dependencies (class mediators, connectors,
+     * registry resources) were not yet loaded on the first attempt get a second chance.
+     */
+    private void retryFaultyCapps() {
+        List<CarbonApplication> toRetry = new ArrayList<>(faultyCAppObjects);
+        for (CarbonApplication app : toRetry) {
+            if (app == null) {
+                continue;
+            }
+            String appFilePath = app.getAppFilePath();
+            if (appFilePath == null) {
+                continue;
+            }
+            String cAppName = appFilePath.substring(appFilePath.lastIndexOf(File.separator) + 1);
+            log.info("Retrying deployment of faulty Carbon Application: " + cAppName);
+            synchronized (lock) {
+                faultyCapps.remove(cAppName);
+                faultyCAppObjects.remove(app);
+            }
+            try {
+                deployCarbonApps(appFilePath, false);
+            } catch (CarbonException e) {
+                log.error("Retry deployment also failed for Carbon Application: " + cAppName, e);
             }
         }
     }

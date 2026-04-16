@@ -34,7 +34,10 @@ import java.util.Objects;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
+import static org.wso2.micro.integrator.initializer.deployment.synapse.deployer.SynapseAppDeployerConstants.MEDIATOR_TYPE;
+import static org.wso2.micro.integrator.initializer.deployment.synapse.deployer.SynapseAppDeployerConstants.SYNAPSE_LIBRARY_TYPE;
 import static org.wso2.micro.integrator.initializer.utils.DeployerUtilTest.createCarFile;
+import static org.wso2.micro.integrator.initializer.utils.DeployerUtilTest.createHighPriorityCarFile;
 import static org.wso2.micro.integrator.initializer.utils.DeployerUtilTest.writeDescriptorToExistingCarFile;
 
 public class CappDeployerTest {
@@ -346,5 +349,143 @@ public class CappDeployerTest {
         assertEquals("a.car", files.get(0).getFile().getName());
         assertEquals("b.car", files.get(1).getFile().getName());
         assertEquals("c.car", files.get(2).getFile().getName());
+    }
+
+    // -----------------------------------------------------------------------
+    // Content-based priority tests (covers issue #4853)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Reproduces the exact failure from issue #4853:
+     * "a-proxy.car" (consumer, no lib artifact) sorts before "z-mediator-lib.car"
+     * (provides lib/synapse/mediator) alphabetically.  After content-priority sort
+     * the mediator library CApp must come first.
+     */
+    @Test
+    public void testSort_ContentPriority_ClassMediatorCAppDeployedBeforeConsumer() throws Exception {
+
+        File consumerCar = createCarFile(tempCAppDir, "a-proxy.car");
+        File mediatorCar = createHighPriorityCarFile(tempCAppDir, "z-mediator-lib.car", MEDIATOR_TYPE);
+
+        List<DeploymentFileData> files = new ArrayList<>();
+        files.add(new DeploymentFileData(consumerCar, cappDeployer));
+        files.add(new DeploymentFileData(mediatorCar, cappDeployer));
+
+        cappDeployer.sort(files, 0, files.size());
+
+        // Mediator library CApp must deploy first despite alphabetical order putting it second
+        assertEquals("z-mediator-lib.car", files.get(0).getFile().getName());
+        assertEquals("a-proxy.car", files.get(1).getFile().getName());
+    }
+
+    /**
+     * Connector CApps (synapse/lib type) must be deployed before CApps that use them,
+     * even when the connector CApp sorts after the consumer alphabetically.
+     */
+    @Test
+    public void testSort_ContentPriority_ConnectorCAppDeployedFirst() throws Exception {
+
+        File consumerCar = createCarFile(tempCAppDir, "a-api.car");
+        File connectorCar = createHighPriorityCarFile(tempCAppDir, "z-connector.car", SYNAPSE_LIBRARY_TYPE);
+
+        List<DeploymentFileData> files = new ArrayList<>();
+        files.add(new DeploymentFileData(consumerCar, cappDeployer));
+        files.add(new DeploymentFileData(connectorCar, cappDeployer));
+
+        cappDeployer.sort(files, 0, files.size());
+
+        assertEquals("z-connector.car", files.get(0).getFile().getName());
+        assertEquals("a-api.car", files.get(1).getFile().getName());
+    }
+
+    /**
+     * Registry-resource CApps (registry/resource type) must be deployed before consumers,
+     * even when the registry CApp sorts after the consumer alphabetically.
+     */
+    @Test
+    public void testSort_ContentPriority_RegistryResourceCAppDeployedFirst() throws Exception {
+
+        File consumerCar = createCarFile(tempCAppDir, "a-consumer.car");
+        File registryCar = createHighPriorityCarFile(tempCAppDir, "z-registry.car", "registry/resource");
+
+        List<DeploymentFileData> files = new ArrayList<>();
+        files.add(new DeploymentFileData(consumerCar, cappDeployer));
+        files.add(new DeploymentFileData(registryCar, cappDeployer));
+
+        cappDeployer.sort(files, 0, files.size());
+
+        assertEquals("z-registry.car", files.get(0).getFile().getName());
+        assertEquals("a-consumer.car", files.get(1).getFile().getName());
+    }
+
+    /**
+     * When multiple CApps are high-priority (mediator/connector/registry), they must be
+     * sorted alphabetically among themselves and all precede normal-priority CApps.
+     */
+    @Test
+    public void testSort_ContentPriority_AlphabeticalWithinHighPriorityTier() throws Exception {
+
+        File connectorCar = createHighPriorityCarFile(tempCAppDir, "c-connector.car", SYNAPSE_LIBRARY_TYPE);
+        File mediatorCar  = createHighPriorityCarFile(tempCAppDir, "a-mediator.car",  MEDIATOR_TYPE);
+        File consumerCar  = createCarFile(tempCAppDir, "z-consumer.car");
+
+        List<DeploymentFileData> files = new ArrayList<>();
+        files.add(new DeploymentFileData(connectorCar, cappDeployer));
+        files.add(new DeploymentFileData(mediatorCar,  cappDeployer));
+        files.add(new DeploymentFileData(consumerCar,  cappDeployer));
+
+        cappDeployer.sort(files, 0, files.size());
+
+        // Both high-priority CApps deploy before the consumer; alphabetical within that tier
+        assertEquals("a-mediator.car",  files.get(0).getFile().getName());
+        assertEquals("c-connector.car", files.get(1).getFile().getName());
+        assertEquals("z-consumer.car",  files.get(2).getFile().getName());
+    }
+
+    /**
+     * Normal-priority CApps (no lib/connector/registry artifacts) must be sorted
+     * alphabetically among themselves after all high-priority CApps.
+     */
+    @Test
+    public void testSort_ContentPriority_AlphabeticalWithinNormalPriorityTier() throws Exception {
+
+        File mediatorCar  = createHighPriorityCarFile(tempCAppDir, "z-mediator.car", MEDIATOR_TYPE);
+        File consumerCar2 = createCarFile(tempCAppDir, "c-proxy.car");
+        File consumerCar1 = createCarFile(tempCAppDir, "a-proxy.car");
+
+        List<DeploymentFileData> files = new ArrayList<>();
+        files.add(new DeploymentFileData(mediatorCar,  cappDeployer));
+        files.add(new DeploymentFileData(consumerCar2, cappDeployer));
+        files.add(new DeploymentFileData(consumerCar1, cappDeployer));
+
+        cappDeployer.sort(files, 0, files.size());
+
+        // High-priority first, then normal-priority CApps alphabetically
+        assertEquals("z-mediator.car", files.get(0).getFile().getName());
+        assertEquals("a-proxy.car",    files.get(1).getFile().getName());
+        assertEquals("c-proxy.car",    files.get(2).getFile().getName());
+    }
+
+    /**
+     * When every CApp in the deployment is high-priority, the result must be
+     * pure alphabetical order (no consumer CApps to push to the back).
+     */
+    @Test
+    public void testSort_ContentPriority_AllHighPriorityOrderedAlphabetically() throws Exception {
+
+        File carC = createHighPriorityCarFile(tempCAppDir, "c-mediator.car",  MEDIATOR_TYPE);
+        File carA = createHighPriorityCarFile(tempCAppDir, "a-connector.car", SYNAPSE_LIBRARY_TYPE);
+        File carB = createHighPriorityCarFile(tempCAppDir, "b-registry.car",  "registry/resource");
+
+        List<DeploymentFileData> files = new ArrayList<>();
+        files.add(new DeploymentFileData(carC, cappDeployer));
+        files.add(new DeploymentFileData(carA, cappDeployer));
+        files.add(new DeploymentFileData(carB, cappDeployer));
+
+        cappDeployer.sort(files, 0, files.size());
+
+        assertEquals("a-connector.car", files.get(0).getFile().getName());
+        assertEquals("b-registry.car",  files.get(1).getFile().getName());
+        assertEquals("c-mediator.car",  files.get(2).getFile().getName());
     }
 }

@@ -69,6 +69,30 @@ public class DeployerUtilTest {
     }
 
     /**
+     * Creates a .car file whose {@code artifacts.xml} declares a single artifact of the given
+     * {@code artifactType}.  This causes {@code CappDeployer.isHighPriorityCApp()} to classify the
+     * CApp as high-priority (e.g. {@code lib/synapse/mediator}, {@code synapse/lib}, or
+     * {@code registry/resource}).
+     */
+    public static File createHighPriorityCarFile(File dir, String carFileName, String artifactType) throws IOException {
+
+        File carFile = new File(dir, carFileName);
+        try (ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(carFile))) {
+            ZipEntry artifactsEntry = new ZipEntry("artifacts.xml");
+            zos.putNextEntry(artifactsEntry);
+            String artifactsXml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
+                    "<artifacts>\n" +
+                    "  <artifact name=\"test-artifact\" version=\"1.0.0\" type=\"" + artifactType + "\">\n" +
+                    "    <file>test-artifact-1.0.0.jar</file>\n" +
+                    "  </artifact>\n" +
+                    "</artifacts>";
+            zos.write(artifactsXml.getBytes());
+            zos.closeEntry();
+        }
+        return carFile;
+    }
+
+    /**
      * Creates a FAT CAR file containing a nested dependency CAR under dependencies dir.
      * The outer FAT CAR has fatCarEnabled=true in its descriptor.xml.
      */
