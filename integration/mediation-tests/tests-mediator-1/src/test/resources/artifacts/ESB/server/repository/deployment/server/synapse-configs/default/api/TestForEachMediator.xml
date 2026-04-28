@@ -236,4 +236,45 @@
         <faultSequence>
         </faultSequence>
     </resource>
+    <!-- Issue #4165: variable-backed collection, parallel-execution=true, update-original=true -->
+    <resource methods="GET" uri-template="/json-var-parallel-update">
+        <inSequence>
+            <variable name="arrayVar" type="JSON"
+                      value="{&quot;array&quot;:[{&quot;id&quot;:&quot;011&quot;},{&quot;id&quot;:&quot;012&quot;}]}"/>
+            <foreach collection="${vars.arrayVar.array}" parallel-execution="true" update-original="true">
+                <sequence>
+                    <log category="INFO">
+                        <message>ID_VALUE = ${payload.id}</message>
+                    </log>
+                </sequence>
+            </foreach>
+            <log category="INFO">
+                <message>AFTER_FOREACH : ${vars.arrayVar}</message>
+            </log>
+            <payloadFactory media-type="json">
+                <format><![CDATA[{"status":"done","result":${vars.arrayVar}}]]></format>
+            </payloadFactory>
+            <respond/>
+        </inSequence>
+        <faultSequence>
+        </faultSequence>
+    </resource>
+    <!-- Issue #4165 regression: body-backed collection, parallel-execution=true, update-original=true -->
+    <resource methods="POST" uri-template="/json-body-parallel-update">
+        <inSequence>
+            <foreach collection="${payload.items}" parallel-execution="true" update-original="true">
+                <sequence>
+                    <log category="INFO">
+                        <message>BODY_ITEM = ${payload.name}</message>
+                    </log>
+                </sequence>
+            </foreach>
+            <log category="INFO">
+                <message>BODY_AFTER_FOREACH = ${payload}</message>
+            </log>
+            <respond/>
+        </inSequence>
+        <faultSequence>
+        </faultSequence>
+    </resource>
 </api>

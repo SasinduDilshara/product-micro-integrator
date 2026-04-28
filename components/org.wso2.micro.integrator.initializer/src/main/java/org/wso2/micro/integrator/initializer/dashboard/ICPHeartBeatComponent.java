@@ -587,8 +587,8 @@ public class ICPHeartBeatComponent {
             }
 
             if (!payload.has("version") || payload.get("version").isJsonNull()) {
-                payload.addProperty("version", "4.4.0");
-                log.warn("Missing version, added default '4.4.0'");
+                payload.addProperty("version", "");
+                log.warn("Missing version, added default as empty");
             }
 
             // Validate nodeInfo structure
@@ -596,7 +596,7 @@ public class ICPHeartBeatComponent {
                     || !payload.get("nodeInfo").isJsonObject()) {
                 JsonObject nodeInfo = new JsonObject();
                 nodeInfo.addProperty("platformName", "wso2-mi");
-                nodeInfo.addProperty("platformVersion", "4.4.0");
+                nodeInfo.addProperty("platformVersion", "");
                 nodeInfo.addProperty("platformHome", System.getProperty("carbon.home", "/opt/wso2mi"));
                 nodeInfo.addProperty("osName", System.getProperty("os.name", "unknown"));
                 nodeInfo.addProperty("osVersion", System.getProperty("os.version", "unknown"));
@@ -663,12 +663,12 @@ public class ICPHeartBeatComponent {
             minimalPayload.addProperty("environment", "dev");
             minimalPayload.addProperty("project", "default");
             minimalPayload.addProperty("component", "micro-integrator");
-            minimalPayload.addProperty("version", "4.4.0");
+            minimalPayload.addProperty("version", "");
             minimalPayload.addProperty("runtimeHash", "");
 
             JsonObject nodeInfo = new JsonObject();
             nodeInfo.addProperty("platformName", "wso2-mi");
-            nodeInfo.addProperty("platformVersion", "4.4.0");
+            nodeInfo.addProperty("platformVersion", "");
             minimalPayload.add("nodeInfo", nodeInfo);
 
             minimalPayload.add("artifacts", createEmptyArtifactsStructure());
@@ -844,7 +844,15 @@ public class ICPHeartBeatComponent {
      * Gets the MI version.
      */
     private static String getMicroIntegratorVersion() {
-        return System.getProperty("product.version", "4.4.0");
+        String version = MicroIntegratorBaseUtils.getServerConfiguration().getFirstProperty("Version");
+        if (log.isDebugEnabled()) {
+            log.debug("Retrieved MI version from configuration: " + version);
+        }
+        if (version == null) {
+            log.warn("MI version is not configured or empty. Defaulting to empty string.");
+            return "";
+        }
+        return version;
     }
 
     /**
