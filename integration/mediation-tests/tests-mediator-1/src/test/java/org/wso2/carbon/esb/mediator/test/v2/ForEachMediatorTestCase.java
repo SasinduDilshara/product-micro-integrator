@@ -259,6 +259,78 @@ public class ForEachMediatorTestCase extends ESBIntegrationTest {
         }
     }
 
+    /**
+     * Issue #4165: ForEach with variable-backed collection, parallel-execution=true, update-original=true.
+     * Before the fix this scenario threw PathNotFoundException in the async aggregation worker and
+     * the client received no response. After the fix the request must complete with HTTP 200 and
+     * the variable must be updated correctly.
+     */
+    @Test(groups = {"wso2.esb"}, description = "Issue #4165: foreach variable-backed collection parallel update-original")
+    public void testForEachJSONVariable_ParallelUpdateOriginal() throws IOException, InterruptedException {
+
+        CarbonLogReader carbonLogReader = new CarbonLogReader();
+        carbonLogReader.start();
+
+        String serviceURL = getMainSequenceURL() + "foreach/json-var-parallel-update";
+        HttpResponse httpResponse = httpClient.doGet(serviceURL, null);
+        Assert.assertEquals(httpResponse.getStatusLine().getStatusCode(), 200,
+                "Response code mismatched — foreach with variable-backed collection, parallel=true, update-original=true must return 200");
+
+        String responsePayload = httpClient.getResponsePayload(httpResponse);
+        assertNotNull("Response payload must not be null", responsePayload);
+
+        JsonElement responseJSON = JsonParser.parseString(responsePayload);
+        assertTrue("Response must be a JSON object", responseJSON.isJsonObject());
+        Assert.assertEquals("done",
+                responseJSON.getAsJsonObject().get("status").getAsString(),
+                "status field must be 'done'");
+
+        // Both array elements must have been logged (parallel execution)
+        boolean logId011 = carbonLogReader.checkForLog("ID_VALUE = 011", DEFAULT_TIMEOUT);
+        boolean logId012 = carbonLogReader.checkForLog("ID_VALUE = 012", DEFAULT_TIMEOUT);
+        Assert.assertTrue(logId011, "ID_VALUE = 011 must appear in the log");
+        Assert.assertTrue(logId012, "ID_VALUE = 012 must appear in the log");
+
+        // Variable must be updated and logged after foreach
+        boolean afterForeachLog = carbonLogReader.checkForLog("AFTER_FOREACH", DEFAULT_TIMEOUT);
+        Assert.assertTrue(afterForeachLog, "AFTER_FOREACH log entry must appear (respond mediator must be reached)");
+
+        carbonLogReader.stop();
+    }
+
+    /**
+     * Regression guard for issue #4165: body-backed collection with parallel-execution=true and
+     * update-original=true must still work correctly after the fix.
+     */
+    @Test(groups = {"wso2.esb"}, description = "Issue #4165 regression: foreach body-backed collection parallel update-original")
+    public void testForEachJSONBody_ParallelUpdateOriginal() throws IOException, InterruptedException {
+
+        CarbonLogReader carbonLogReader = new CarbonLogReader();
+        carbonLogReader.start();
+
+        String payload = "{\"items\":[{\"name\":\"item1\"},{\"name\":\"item2\"}]}";
+        String serviceURL = getMainSequenceURL() + "foreach/json-body-parallel-update";
+        HttpResponse httpResponse = httpClient.doPost(serviceURL, null, payload, "application/json");
+        Assert.assertEquals(httpResponse.getStatusLine().getStatusCode(), 200,
+                "Response code mismatched — body-backed foreach with parallel=true, update-original=true must return 200");
+
+        String responsePayload = httpClient.getResponsePayload(httpResponse);
+        assertNotNull("Response payload must not be null", responsePayload);
+
+        JsonElement responseJSON = JsonParser.parseString(responsePayload);
+        assertTrue("Response must be a JSON object", responseJSON.isJsonObject());
+        assertTrue("Response must contain 'items' key",
+                responseJSON.getAsJsonObject().has("items"));
+
+        // Both items must have been logged
+        boolean logItem1 = carbonLogReader.checkForLog("BODY_ITEM = item1", DEFAULT_TIMEOUT);
+        boolean logItem2 = carbonLogReader.checkForLog("BODY_ITEM = item2", DEFAULT_TIMEOUT);
+        Assert.assertTrue(logItem1, "BODY_ITEM = item1 must appear in the log");
+        Assert.assertTrue(logItem2, "BODY_ITEM = item2 must appear in the log");
+
+        carbonLogReader.stop();
+    }
+
     private static Document parseXML(String xml) throws IOException, ParserConfigurationException, SAXException {
 
         DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
