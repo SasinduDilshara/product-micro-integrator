@@ -340,6 +340,35 @@ public class RegistryResourcesTestCase extends ESBIntegrationTest {
         Assert.assertEquals(responsePayload, expected, "Invalid registry content received " + responsePayload);
     }
 
+    @Test(groups = { "wso2.esb" }, priority = 3,
+            description = "Test fetching properties of a registry resource that has no properties returns empty list")
+    public void testRegistryGetPropertiesEmptyList() throws IOException {
+
+        // registry/config/testFolder/test-text.txt exists (created at priority 2) but has no properties yet.
+        // Before the fix for issue #4767 this call returned {"list":"Error while fetching properties"}.
+        // After the fix it must return {"count":0,"list":[]}.
+        String endpoint = "https://" + hostName + ":" + (DEFAULT_INTERNAL_API_HTTPS_PORT + portOffset) + "/management/"
+                + "registry-resources/properties";
+        String registryPath = "registry/config/testFolder/test-text.txt";
+        String queryParameters = "?path=" + registryPath;
+        String expected = "{\"count\":0,\"list\":[]}";
+
+        SimpleHttpClient client = new SimpleHttpClient();
+        HttpResponse response = client.doGet(endpoint + queryParameters, getHeaderMap());
+        String responsePayload = client.getResponsePayload(response);
+        Assert.assertEquals(response.getStatusLine().getStatusCode(), 200, "Invalid response status " +
+                response.getStatusLine().getStatusCode() + " returned.");
+        JSONObject jsonResponse = new JSONObject(responsePayload);
+        JSONAssert.assertEquals(expected, jsonResponse.toString(), false);
+        Assert.assertEquals(jsonResponse.getInt("count"), 0,
+                "Expected count 0 for resource with no properties, got: " + jsonResponse.getInt("count"));
+        Assert.assertEquals(jsonResponse.getJSONArray("list").length(), 0,
+                "Expected empty list for resource with no properties, got: " + jsonResponse.getJSONArray("list").length());
+        // Ensure the response does NOT contain the old error string
+        Assert.assertFalse(responsePayload.contains("Error while fetching properties"),
+                "Response must not contain error string for a resource with no properties");
+    }
+
     @Test(groups = { "wso2.esb" }, priority = 3, description = "Test fetching registry properties as a list")
     public void testRegistryGetPropertiesList() throws IOException {
 
